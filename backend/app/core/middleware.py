@@ -19,7 +19,11 @@ class RequestContextAndRateLimitMiddleware(BaseHTTPMiddleware):
         request.state.request_id = request_id
 
         settings = get_settings()
-        if settings.rate_limit_enabled and not request.url.path.startswith("/health"):
+        if (
+            settings.rate_limit_enabled
+            and request.method != "OPTIONS"
+            and not request.url.path.startswith("/health")
+        ):
             client_ip = (
                 request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
                 or (request.client.host if request.client else "unknown")

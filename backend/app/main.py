@@ -26,6 +26,7 @@ def create_app() -> FastAPI:
         openapi_url="/openapi.json",
     )
 
+    app.add_middleware(RequestContextAndRateLimitMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_allowed_origins,
@@ -33,7 +34,6 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    app.add_middleware(RequestContextAndRateLimitMiddleware)
     register_exception_handlers(app)
 
     @app.get("/health", tags=["Health"], summary="Service health check")
