@@ -4,6 +4,7 @@ Never fabricates averages from empty datasets: every numeric metric returns None
 when response_count == 0, paired with an explicit `data_coverage` object.
 """
 
+from collections import Counter
 from typing import Any
 from uuid import UUID
 
@@ -20,6 +21,7 @@ from app.core.enums import (
     EvidenceClassification,
     FollowUpStatus,
     OutcomeType,
+    QuestionType,
     ScoreStatus,
 )
 from app.core.exceptions import NotFoundError
@@ -30,8 +32,8 @@ from app.models.impact import (
     ParticipantAction,
     ProfessionalConnection,
 )
-from app.models.participant import AttendanceRecord, Event, EventRegistration
-from app.models.questionnaire import AssessmentSubmission
+from app.models.participant import AttendanceRecord, Event, EventRegistration, Participant
+from app.models.questionnaire import AssessmentResponse, AssessmentSubmission, Question
 from app.models.scoring import (
     MeasurementPillar,
     ParticipantDimensionScore,
@@ -573,4 +575,183 @@ class AnalyticsService:
             "event_title": event.title,
             "stages_tracked": len(stages_comparison),
             "stages": stages_comparison,
+        }
+
+    def get_demographics_analytics(self, event_id: UUID) -> dict[str, Any]:
+        event = self._require_event(event_id)
+
+        reg_p_ids = list(
+            self.db.execute(
+                select(EventRegistration.participant_id).where(
+                    EventRegistration.event_id == event_id
+                )
+            )
+            .scalars()
+            .all()
+        )
+        sub_p_ids = list(
+            self.db.execute(
+                select(AssessmentSubmission.participant_id)
+                .distinct()
+                .where(AssessmentSubmission.event_id == event_id)
+            )
+            .scalars()
+            .all()
+        )
+        all_p_ids = list(dict.fromkeys(reg_p_ids + sub_p_ids))
+        participants: list[Participant] = []
+        if all_p_ids:
+            participants = list(
+                self.db.execute(
+                    select(Participant).where(Participant.id.in_(all_p_ids))
+                )
+                .scalars()
+                .all()
+            )
+
+        total = len(participants)
+
+        def _tally(values: list[str | None]) -> dict[str, Any]:
+            non_empty = [v.strip() for v in values if v and v.strip()]
+            counts = Counter(non_empty)
+            buckets = [
+                {
+                    "label": label,
+                    "count": count,
+                    "share": round(count / len(non_empty), 4) if non_empty else 0.0,
+                }
+                for label, count in counts.most_common()
+            ]
+            return {
+                "buckets": buckets,
+                "data_coverage": _coverage_indicator(len(non_empty), total),
+            }
+
+        yoe_vals = [
+            float(p.years_of_experience)
+            for p in participants
+            if p.years_of_experience is not None
+        ]
+
+        return {
+            "event_id": str(event.id),
+            "event_title": event.title,
+            "total_participants": total,
+            "by_industry": _tally([p.industry for p in participants]),
+            "by_role": _tally([p.current_role for p in participants]),
+            "by_organisation": _tally([p.organisation for p in participants]),
+            "years_of_experience": _numeric_stats(yoe_vals, total),
+        }
+
+    def get_question_distributions(
+        self,
+        event_id: UUID,
+        *,
+        questionnaire_id: UUID | None = None,
+        question_id: UUID | None = None,
+    ) -> dict[str, Any]:
+        event = self._require_event(event_id)
+        counts = self._event_population_counts(event_id)
+        respondents = counts["unique_assessment_respondents"]
+
+        stmt = (
+            select(AssessmentResponse, Question)
+            .join(
+                AssessmentSubmission,
+                AssessmentSubmission.id == AssessmentResponse.submission_id,
+            )
+            .join(Question, Question.id == AssessmentResponse.question_id)
+            .options(selectinload(Question.options))
+            .where(AssessmentSubmission.event_id == event_id)
+        )
+        if questionnaire_id is not None:
+            stmt = stmt.where(AssessmentSubmission.questionnaire_id == questionnaire_id)
+        if question_id is not None:
+            stmt = stmt.where(AssessmentResponse.question_id == question_id)
+
+        rows = self.db.execute(stmt).all()
+
+        grouped: dict[UUID, tuple[Question, list[AssessmentResponse]]] = {}
+        for resp, q in rows:
+            if q.id not in grouped:
+                grouped[q.id] = (q, [])
+            grouped[q.id][1].append(resp)
+
+        questions_out: list[dict[str, Any]] = []
+        for q, resps in sorted(grouped.values(), key=lambda pair: pair[0].display_order):
+            qtype = q.question_type
+            option_labels = {o.option_value: o.option_label for o in q.options}
+            dist_counter: Counter[str] = Counter()
+            numeric_vals: list[float] = []
+            answered_count = 0
+
+            for r in resps:
+                if qtype == QuestionType.YES_NO.value and r.response_boolean is not None:
+                    answered_count += 1
+                    dist_counter["Yes" if r.response_boolean else "No"] += 1
+                elif qtype == QuestionType.SINGLE_CHOICE.value and r.response_text:
+                    answered_count += 1
+                    label = option_labels.get(r.response_text, r.response_text)
+                    dist_counter[label] += 1
+                elif qtype == QuestionType.MULTIPLE_CHOICE.value and isinstance(
+                    r.response_json, list
+                ):
+                    if r.response_json:
+                        answered_count += 1
+                        for val in r.response_json:
+                            label = option_labels.get(str(val), str(val))
+                            dist_counter[label] += 1
+                elif (
+                    qtype in {QuestionType.RATING_SCALE.value, QuestionType.NUMERIC.value}
+                    and r.response_numeric is not None
+                ):
+                    answered_count += 1
+                    numeric_vals.append(float(r.response_numeric))
+                    key = (
+                        str(int(r.response_numeric))
+                        if float(r.response_numeric).is_integer()
+                        else str(r.response_numeric)
+                    )
+                    dist_counter[option_labels.get(key, key)] += 1
+                elif qtype in {
+                    QuestionType.SHORT_TEXT.value,
+                    QuestionType.LONG_TEXT.value,
+                } and (r.response_text and r.response_text.strip()):
+                    answered_count += 1
+                elif qtype == QuestionType.DATE.value and r.response_date is not None:
+                    answered_count += 1
+                    dist_counter[r.response_date.isoformat()] += 1
+
+            denom = max(respondents, answered_count)
+            total_dist_selections = sum(dist_counter.values())
+            distribution = [
+                {
+                    "value": val,
+                    "count": cnt,
+                    "share": round(cnt / answered_count, 4) if answered_count > 0 else 0.0,
+                }
+                for val, cnt in dist_counter.most_common()
+            ] if total_dist_selections > 0 else []
+
+            questions_out.append(
+                {
+                    "question_id": str(q.id),
+                    "question_code": q.code,
+                    "question_text": q.question_text,
+                    "question_type": qtype,
+                    "is_scorable": q.is_scorable,
+                    "response_count": answered_count,
+                    "data_coverage": _coverage_indicator(answered_count, denom),
+                    "distribution": distribution,
+                    "numeric_stats": _numeric_stats(numeric_vals, denom)
+                    if qtype in {QuestionType.RATING_SCALE.value, QuestionType.NUMERIC.value}
+                    else None,
+                }
+            )
+
+        return {
+            "event_id": str(event.id),
+            "event_title": event.title,
+            "respondents_count": respondents,
+            "questions": questions_out,
         }

@@ -169,6 +169,44 @@ def get_participant_follow_ups(
 # --- Structured Impact Tracking Sub-Resources ---
 
 
+@router.get(
+    "/impact/actions",
+    summary="List participant actions",
+    description="Returns paginated intended, in-progress, completed, and abandoned participant actions. Restricted to administrators.",
+)
+def list_actions(
+    request: Request,
+    event_id: UUID | None = Query(default=None),
+    participant_id: UUID | None = Query(default=None),
+    action_status: str | None = Query(default=None),
+    action_category: str | None = Query(default=None),
+    evidence_classification: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    actor: ActorContext = Depends(require_admin),
+):
+    items, total = ImpactTrackingService(db).list_actions(
+        event_id=event_id,
+        participant_id=participant_id,
+        action_status=action_status,
+        action_category=action_category,
+        evidence_classification=evidence_classification,
+        limit=limit,
+        offset=offset,
+    )
+    return ok(
+        [item.model_dump(mode="json") for item in items],
+        meta={
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": (offset + len(items)) < total,
+        },
+        request_id=getattr(request.state, "request_id", None),
+    )
+
+
 @router.post(
     "/impact/actions",
     status_code=status.HTTP_201_CREATED,
@@ -205,6 +243,42 @@ def update_action(
     )
 
 
+@router.get(
+    "/impact/connections",
+    summary="List professional connections",
+    description="Returns paginated participant-reported networking connections, collaborations, and opportunities. Restricted to administrators.",
+)
+def list_connections(
+    request: Request,
+    event_id: UUID | None = Query(default=None),
+    participant_id: UUID | None = Query(default=None),
+    connection_type: str | None = Query(default=None),
+    evidence_classification: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    actor: ActorContext = Depends(require_admin),
+):
+    items, total = ImpactTrackingService(db).list_connections(
+        event_id=event_id,
+        participant_id=participant_id,
+        connection_type=connection_type,
+        evidence_classification=evidence_classification,
+        limit=limit,
+        offset=offset,
+    )
+    return ok(
+        [item.model_dump(mode="json") for item in items],
+        meta={
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": (offset + len(items)) < total,
+        },
+        request_id=getattr(request.state, "request_id", None),
+    )
+
+
 @router.post(
     "/impact/connections",
     status_code=status.HTTP_201_CREATED,
@@ -219,6 +293,44 @@ def create_connection(
     conn = ImpactTrackingService(db).create_connection(payload, actor=actor)
     return ok(
         ProfessionalConnectionRead.model_validate(conn).model_dump(mode="json"),
+        request_id=getattr(request.state, "request_id", None),
+    )
+
+
+@router.get(
+    "/impact/outcomes",
+    summary="List impact outcomes and evidence",
+    description="Returns paginated impact outcomes with evidence items and verification status for review and verification. Restricted to administrators.",
+)
+def list_outcomes(
+    request: Request,
+    event_id: UUID | None = Query(default=None),
+    participant_id: UUID | None = Query(default=None),
+    outcome_type: str | None = Query(default=None),
+    evidence_classification: str | None = Query(default=None),
+    verification_status: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    actor: ActorContext = Depends(require_admin),
+):
+    items, total = ImpactTrackingService(db).list_outcomes(
+        event_id=event_id,
+        participant_id=participant_id,
+        outcome_type=outcome_type,
+        evidence_classification=evidence_classification,
+        verification_status=verification_status,
+        limit=limit,
+        offset=offset,
+    )
+    return ok(
+        [item.model_dump(mode="json") for item in items],
+        meta={
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": (offset + len(items)) < total,
+        },
         request_id=getattr(request.state, "request_id", None),
     )
 

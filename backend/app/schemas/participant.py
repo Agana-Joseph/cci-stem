@@ -76,6 +76,15 @@ class ParticipantRead(BaseModel):
     updated_at: datetime
 
 
+class ParticipantDirectoryItem(ParticipantRead):
+    registered_event_count: int = 0
+    assessments_count: int = 0
+    latest_assessment_at: datetime | None = None
+    registration_date: datetime | None = None
+    attendance_status: str | None = None
+    assessment_status: str = "pending"
+
+
 class ParticipantLookupPublicResponse(BaseModel):
     """Generic non-enumerating response for unauthenticated public lookup calls."""
 

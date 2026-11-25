@@ -6,6 +6,7 @@ from typing import Any
 from uuid import UUID
 
 import pandas as pd
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -19,6 +20,7 @@ from app.models.participant import (
     EventRegistration,
     Participant,
 )
+from app.models.questionnaire import AssessmentSubmission
 from app.repositories.participant import EventRepository, ParticipantRepository
 from app.schemas.participant import (
     AttendanceUpsert,
@@ -27,9 +29,11 @@ from app.schemas.participant import (
     EventUpdate,
     ImportRowError,
     ParticipantCreate,
+    ParticipantDirectoryItem,
     ParticipantImportReport,
     ParticipantLookupAdminResponse,
     ParticipantLookupPublicResponse,
+    ParticipantRead,
     ParticipantUpdate,
     RegistrationCreate,
 )
@@ -143,6 +147,158 @@ class ParticipantService:
         if participant is None:
             raise NotFoundError("Participant", participant_id)
         return participant
+
+    def list_participants(
+        self,
+        *,
+        q: str | None = None,
+        event_id: UUID | None = None,
+        industry: str | None = None,
+        attendance_status: str | None = None,
+        has_assessment: bool | None = None,
+        sort_by: str = "created_at",
+        sort_order: str = "desc",
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[ParticipantDirectoryItem], int]:
+        stmt = select(Participant)
+        count_stmt = select(func.count(func.distinct(Participant.id)))
+
+        if event_id is not None:
+            reg_subq = select(EventRegistration.participant_id).where(
+                EventRegistration.event_id == event_id
+            )
+            stmt = stmt.where(Participant.id.in_(reg_subq))
+            count_stmt = count_stmt.where(Participant.id.in_(reg_subq))
+
+        if q and q.strip():
+            term = f"%{q.strip()}%"
+            search_filter = or_(
+                Participant.full_name.ilike(term),
+                Participant.email_normalised.ilike(term),
+                Participant.phone_normalised.ilike(term),
+                Participant.organisation.ilike(term),
+                Participant.current_role.ilike(term),
+            )
+            stmt = stmt.where(search_filter)
+            count_stmt = count_stmt.where(search_filter)
+
+        if industry and industry.strip():
+            ind_filter = Participant.industry.ilike(f"%{industry.strip()}%")
+            stmt = stmt.where(ind_filter)
+            count_stmt = count_stmt.where(ind_filter)
+
+        if attendance_status:
+            att_subq = select(AttendanceRecord.participant_id).where(
+                AttendanceRecord.attendance_status == attendance_status
+            )
+            if event_id is not None:
+                att_subq = att_subq.where(AttendanceRecord.event_id == event_id)
+            stmt = stmt.where(Participant.id.in_(att_subq))
+            count_stmt = count_stmt.where(Participant.id.in_(att_subq))
+
+        if has_assessment is not None:
+            sub_subq = select(AssessmentSubmission.participant_id)
+            if event_id is not None:
+                sub_subq = sub_subq.where(AssessmentSubmission.event_id == event_id)
+            if has_assessment:
+                stmt = stmt.where(Participant.id.in_(sub_subq))
+                count_stmt = count_stmt.where(Participant.id.in_(sub_subq))
+            else:
+                stmt = stmt.where(Participant.id.notin_(sub_subq))
+                count_stmt = count_stmt.where(Participant.id.notin_(sub_subq))
+
+        sort_columns = {
+            "created_at": Participant.created_at,
+            "full_name": Participant.full_name,
+            "industry": Participant.industry,
+            "organisation": Participant.organisation,
+        }
+        sort_col = sort_columns.get(sort_by, Participant.created_at)
+        order_expr = sort_col.asc() if sort_order.lower() == "asc" else sort_col.desc()
+
+        total = int(self.db.execute(count_stmt).scalar_one())
+        participants = list(
+            self.db.execute(stmt.order_by(order_expr).limit(limit).offset(offset))
+            .scalars()
+            .all()
+        )
+        if not participants:
+            return [], total
+
+        p_ids = [p.id for p in participants]
+
+        reg_counts = dict(
+            self.db.execute(
+                select(EventRegistration.participant_id, func.count(EventRegistration.id))
+                .where(EventRegistration.participant_id.in_(p_ids))
+                .group_by(EventRegistration.participant_id)
+            ).all()
+        )
+
+        sub_stmt = (
+            select(
+                AssessmentSubmission.participant_id,
+                func.count(AssessmentSubmission.id),
+                func.max(AssessmentSubmission.submitted_at),
+            )
+            .where(AssessmentSubmission.participant_id.in_(p_ids))
+            .group_by(AssessmentSubmission.participant_id)
+        )
+        if event_id is not None:
+            sub_stmt = sub_stmt.where(AssessmentSubmission.event_id == event_id)
+        sub_stats = {row[0]: (int(row[1]), row[2]) for row in self.db.execute(sub_stmt).all()}
+
+        reg_dates: dict[UUID, datetime] = {}
+        att_statuses: dict[UUID, str] = {}
+        if event_id is not None:
+            for pid, reg_at in self.db.execute(
+                select(EventRegistration.participant_id, EventRegistration.registered_at).where(
+                    EventRegistration.event_id == event_id,
+                    EventRegistration.participant_id.in_(p_ids),
+                )
+            ).all():
+                reg_dates[pid] = reg_at
+            for pid, att_st in self.db.execute(
+                select(AttendanceRecord.participant_id, AttendanceRecord.attendance_status).where(
+                    AttendanceRecord.event_id == event_id,
+                    AttendanceRecord.participant_id.in_(p_ids),
+                )
+            ).all():
+                att_statuses[pid] = att_st
+        else:
+            for pid, reg_at in self.db.execute(
+                select(
+                    EventRegistration.participant_id, func.max(EventRegistration.registered_at)
+                )
+                .where(EventRegistration.participant_id.in_(p_ids))
+                .group_by(EventRegistration.participant_id)
+            ).all():
+                if reg_at is not None:
+                    reg_dates[pid] = reg_at
+            for pid, att_st in self.db.execute(
+                select(AttendanceRecord.participant_id, AttendanceRecord.attendance_status)
+                .where(AttendanceRecord.participant_id.in_(p_ids))
+                .order_by(AttendanceRecord.created_at.asc())
+            ).all():
+                att_statuses[pid] = att_st
+
+        items: list[ParticipantDirectoryItem] = []
+        for p in participants:
+            a_count, latest_a = sub_stats.get(p.id, (0, None))
+            base_data = ParticipantRead.model_validate(p).model_dump()
+            items.append(
+                ParticipantDirectoryItem(
+                    **base_data,
+                    registered_event_count=int(reg_counts.get(p.id, 0)),
+                    assessments_count=a_count,
+                    latest_assessment_at=latest_a,
+                    registration_date=reg_dates.get(p.id),
+                    attendance_status=att_statuses.get(p.id),
+                    assessment_status="submitted" if a_count > 0 else "pending",
+                )
+            )
+        return items, total
 
     def update_participant(
         self, participant_id: UUID, payload: ParticipantUpdate, *, actor: ActorContext

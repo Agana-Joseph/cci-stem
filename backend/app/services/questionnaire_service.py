@@ -1,14 +1,16 @@
 """Services for Question Cards, Questions, Questionnaires, and Assessment Submissions."""
 
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timezone
 from uuid import UUID
 
-from sqlalchemy.orm import Session
+from sqlalchemy import func, or_, select
+from sqlalchemy.orm import Session, selectinload
 
 from app.core.enums import QuestionType, QuestionnaireStatus, SubmissionStatus
 from app.core.exceptions import ConflictError, NotFoundError, ValidationAppError
 from app.core.normalisation import normalise_email, normalise_phone
 from app.core.security import ActorContext
+from app.models.participant import Event, Participant
 from app.models.questionnaire import (
     AssessmentResponse,
     AssessmentSubmission,
@@ -31,6 +33,8 @@ from app.repositories.questionnaire import (
 from app.schemas.questionnaire import (
     AssessmentResponseIn,
     AssessmentSubmitRequest,
+    AssessmentSummaryRead,
+    FeedbackResponseRead,
     QuestionCardCreate,
     QuestionCardRead,
     QuestionCardUpdate,
@@ -686,3 +690,275 @@ class QuestionEngineService:
         if self.participant_repo.get_by_id(participant_id) is None:
             raise NotFoundError("Participant", participant_id)
         return self.assessment_repo.list_by_participant(participant_id, event_id=event_id)
+
+    def list_assessments(
+        self,
+        *,
+        event_id: UUID | None = None,
+        questionnaire_id: UUID | None = None,
+        participant_id: UUID | None = None,
+        status: str | None = None,
+        q: str | None = None,
+        date_from: date | None = None,
+        date_to: date | None = None,
+        sort_order: str = "desc",
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[AssessmentSummaryRead], int]:
+        stmt = (
+            select(AssessmentSubmission, Participant, Event, Questionnaire)
+            .join(Participant, Participant.id == AssessmentSubmission.participant_id)
+            .join(Event, Event.id == AssessmentSubmission.event_id)
+            .join(Questionnaire, Questionnaire.id == AssessmentSubmission.questionnaire_id)
+        )
+        count_stmt = (
+            select(func.count(AssessmentSubmission.id))
+            .join(Participant, Participant.id == AssessmentSubmission.participant_id)
+            .join(Event, Event.id == AssessmentSubmission.event_id)
+            .join(Questionnaire, Questionnaire.id == AssessmentSubmission.questionnaire_id)
+        )
+
+        if event_id is not None:
+            stmt = stmt.where(AssessmentSubmission.event_id == event_id)
+            count_stmt = count_stmt.where(AssessmentSubmission.event_id == event_id)
+        if questionnaire_id is not None:
+            stmt = stmt.where(AssessmentSubmission.questionnaire_id == questionnaire_id)
+            count_stmt = count_stmt.where(
+                AssessmentSubmission.questionnaire_id == questionnaire_id
+            )
+        if participant_id is not None:
+            stmt = stmt.where(AssessmentSubmission.participant_id == participant_id)
+            count_stmt = count_stmt.where(
+                AssessmentSubmission.participant_id == participant_id
+            )
+        if status is not None:
+            stmt = stmt.where(AssessmentSubmission.status == status)
+            count_stmt = count_stmt.where(AssessmentSubmission.status == status)
+        if q and q.strip():
+            term = f"%{q.strip()}%"
+            search_filter = or_(
+                Participant.full_name.ilike(term),
+                Participant.email_normalised.ilike(term),
+                Participant.phone_normalised.ilike(term),
+            )
+            stmt = stmt.where(search_filter)
+            count_stmt = count_stmt.where(search_filter)
+        if date_from is not None:
+            start_dt = datetime.combine(date_from, time.min, tzinfo=timezone.utc)
+            stmt = stmt.where(AssessmentSubmission.submitted_at >= start_dt)
+            count_stmt = count_stmt.where(AssessmentSubmission.submitted_at >= start_dt)
+        if date_to is not None:
+            end_dt = datetime.combine(date_to, time.max, tzinfo=timezone.utc)
+            stmt = stmt.where(AssessmentSubmission.submitted_at <= end_dt)
+            count_stmt = count_stmt.where(AssessmentSubmission.submitted_at <= end_dt)
+
+        total = int(self.db.execute(count_stmt).scalar_one())
+        order_expr = (
+            AssessmentSubmission.submitted_at.asc()
+            if sort_order.lower() == "asc"
+            else AssessmentSubmission.submitted_at.desc()
+        )
+        rows = self.db.execute(stmt.order_by(order_expr).limit(limit).offset(offset)).all()
+        if not rows:
+            return [], total
+
+        sub_ids = [r[0].id for r in rows]
+        resp_counts = dict(
+            self.db.execute(
+                select(AssessmentResponse.submission_id, func.count(AssessmentResponse.id))
+                .where(AssessmentResponse.submission_id.in_(sub_ids))
+                .group_by(AssessmentResponse.submission_id)
+            ).all()
+        )
+
+        items = [
+            AssessmentSummaryRead(
+                id=sub.id,
+                participant_id=sub.participant_id,
+                participant_name=participant.full_name,
+                participant_email=participant.email_normalised,
+                participant_phone=participant.phone_normalised,
+                event_id=sub.event_id,
+                event_title=event.title,
+                questionnaire_id=sub.questionnaire_id,
+                questionnaire_title=qn.title,
+                questionnaire_type=qn.questionnaire_type,
+                submission_channel=sub.submission_channel,
+                status=sub.status,
+                started_at=sub.started_at,
+                submitted_at=sub.submitted_at,
+                completeness_ratio=sub.completeness_ratio,
+                responses_count=int(resp_counts.get(sub.id, 0)),
+                created_at=sub.created_at,
+            )
+            for sub, participant, event, qn in rows
+        ]
+        return items, total
+
+    def list_feedback(
+        self,
+        *,
+        event_id: UUID | None = None,
+        questionnaire_id: UUID | None = None,
+        question_id: UUID | None = None,
+        card_id: UUID | None = None,
+        section_code: str | None = None,
+        pillar_id: UUID | None = None,
+        is_scorable: bool | None = None,
+        industry: str | None = None,
+        participant_id: UUID | None = None,
+        q: str | None = None,
+        date_from: date | None = None,
+        date_to: date | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[FeedbackResponseRead], int]:
+        stmt = (
+            select(
+                AssessmentResponse,
+                AssessmentSubmission,
+                Participant,
+                Event,
+                Questionnaire,
+                Question,
+                QuestionnaireSection,
+            )
+            .join(
+                AssessmentSubmission,
+                AssessmentSubmission.id == AssessmentResponse.submission_id,
+            )
+            .join(Participant, Participant.id == AssessmentSubmission.participant_id)
+            .join(Event, Event.id == AssessmentSubmission.event_id)
+            .join(Questionnaire, Questionnaire.id == AssessmentSubmission.questionnaire_id)
+            .join(Question, Question.id == AssessmentResponse.question_id)
+            .outerjoin(
+                QuestionnaireQuestion,
+                (QuestionnaireQuestion.questionnaire_id == AssessmentSubmission.questionnaire_id)
+                & (QuestionnaireQuestion.question_id == AssessmentResponse.question_id),
+            )
+            .outerjoin(
+                QuestionnaireSection,
+                QuestionnaireSection.id == QuestionnaireQuestion.section_id,
+            )
+            .options(selectinload(Question.pillar_mappings))
+        )
+        count_stmt = (
+            select(func.count(func.distinct(AssessmentResponse.id)))
+            .join(
+                AssessmentSubmission,
+                AssessmentSubmission.id == AssessmentResponse.submission_id,
+            )
+            .join(Participant, Participant.id == AssessmentSubmission.participant_id)
+            .join(Event, Event.id == AssessmentSubmission.event_id)
+            .join(Questionnaire, Questionnaire.id == AssessmentSubmission.questionnaire_id)
+            .join(Question, Question.id == AssessmentResponse.question_id)
+            .outerjoin(
+                QuestionnaireQuestion,
+                (QuestionnaireQuestion.questionnaire_id == AssessmentSubmission.questionnaire_id)
+                & (QuestionnaireQuestion.question_id == AssessmentResponse.question_id),
+            )
+            .outerjoin(
+                QuestionnaireSection,
+                QuestionnaireSection.id == QuestionnaireQuestion.section_id,
+            )
+        )
+
+        if event_id is not None:
+            stmt = stmt.where(AssessmentSubmission.event_id == event_id)
+            count_stmt = count_stmt.where(AssessmentSubmission.event_id == event_id)
+        if questionnaire_id is not None:
+            stmt = stmt.where(AssessmentSubmission.questionnaire_id == questionnaire_id)
+            count_stmt = count_stmt.where(
+                AssessmentSubmission.questionnaire_id == questionnaire_id
+            )
+        if question_id is not None:
+            stmt = stmt.where(AssessmentResponse.question_id == question_id)
+            count_stmt = count_stmt.where(AssessmentResponse.question_id == question_id)
+        if card_id is not None:
+            stmt = stmt.where(Question.card_id == card_id)
+            count_stmt = count_stmt.where(Question.card_id == card_id)
+        if section_code is not None:
+            stmt = stmt.where(QuestionnaireSection.code == section_code)
+            count_stmt = count_stmt.where(QuestionnaireSection.code == section_code)
+        if pillar_id is not None:
+            pillar_q_subq = select(QuestionPillarMapping.question_id).where(
+                QuestionPillarMapping.pillar_id == pillar_id
+            )
+            stmt = stmt.where(Question.id.in_(pillar_q_subq))
+            count_stmt = count_stmt.where(Question.id.in_(pillar_q_subq))
+        if is_scorable is not None:
+            stmt = stmt.where(Question.is_scorable.is_(is_scorable))
+            count_stmt = count_stmt.where(Question.is_scorable.is_(is_scorable))
+        if industry and industry.strip():
+            ind_filter = Participant.industry.ilike(f"%{industry.strip()}%")
+            stmt = stmt.where(ind_filter)
+            count_stmt = count_stmt.where(ind_filter)
+        if participant_id is not None:
+            stmt = stmt.where(AssessmentSubmission.participant_id == participant_id)
+            count_stmt = count_stmt.where(
+                AssessmentSubmission.participant_id == participant_id
+            )
+        if q and q.strip():
+            term = f"%{q.strip()}%"
+            text_filter = or_(
+                AssessmentResponse.response_text.ilike(term),
+                AssessmentResponse.explanation_text.ilike(term),
+            )
+            stmt = stmt.where(text_filter)
+            count_stmt = count_stmt.where(text_filter)
+        if date_from is not None:
+            start_dt = datetime.combine(date_from, time.min, tzinfo=timezone.utc)
+            stmt = stmt.where(AssessmentSubmission.submitted_at >= start_dt)
+            count_stmt = count_stmt.where(AssessmentSubmission.submitted_at >= start_dt)
+        if date_to is not None:
+            end_dt = datetime.combine(date_to, time.max, tzinfo=timezone.utc)
+            stmt = stmt.where(AssessmentSubmission.submitted_at <= end_dt)
+            count_stmt = count_stmt.where(AssessmentSubmission.submitted_at <= end_dt)
+
+        total = int(self.db.execute(count_stmt).scalar_one())
+        rows = (
+            self.db.execute(
+                stmt.order_by(
+                    AssessmentSubmission.submitted_at.desc(),
+                    AssessmentResponse.answered_at.desc(),
+                )
+                .limit(limit)
+                .offset(offset)
+            )
+            .unique()
+            .all()
+        )
+
+        items = [
+            FeedbackResponseRead(
+                response_id=resp.id,
+                submission_id=sub.id,
+                submitted_at=sub.submitted_at,
+                answered_at=resp.answered_at,
+                event_id=sub.event_id,
+                event_title=event.title,
+                questionnaire_id=sub.questionnaire_id,
+                questionnaire_title=qn.title,
+                participant_id=sub.participant_id,
+                participant_name=participant.full_name,
+                participant_industry=participant.industry,
+                participant_role=participant.current_role,
+                question_id=question.id,
+                question_code=question.code,
+                question_text=question.question_text,
+                question_type=question.question_type,
+                is_scorable=question.is_scorable,
+                card_id=question.card_id,
+                section_code=section.code if section else None,
+                section_title=section.title if section else None,
+                pillar_ids=[m.pillar_id for m in question.pillar_mappings],
+                response_text=resp.response_text,
+                response_numeric=resp.response_numeric,
+                response_boolean=resp.response_boolean,
+                response_date=resp.response_date,
+                response_json=resp.response_json,
+                explanation_text=resp.explanation_text,
+            )
+            for resp, sub, participant, event, qn, question, section in rows
+        ]
+        return items, total

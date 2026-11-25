@@ -264,3 +264,53 @@ class AssessmentSubmissionRead(BaseModel):
     completeness_ratio: float
     responses: list[AssessmentResponseRead] = Field(default_factory=list)
     created_at: datetime
+
+
+class AssessmentSummaryRead(BaseModel):
+    id: UUID
+    participant_id: UUID
+    participant_name: str
+    participant_email: str | None = None
+    participant_phone: str | None = None
+    event_id: UUID
+    event_title: str
+    questionnaire_id: UUID
+    questionnaire_title: str
+    questionnaire_type: str
+    submission_channel: str
+    status: str
+    started_at: datetime | None = None
+    submitted_at: datetime
+    completeness_ratio: float
+    responses_count: int
+    created_at: datetime
+
+
+class FeedbackResponseRead(BaseModel):
+    response_id: UUID
+    submission_id: UUID
+    submitted_at: datetime
+    answered_at: datetime
+    event_id: UUID
+    event_title: str
+    questionnaire_id: UUID
+    questionnaire_title: str
+    participant_id: UUID
+    participant_name: str
+    participant_industry: str | None = None
+    participant_role: str | None = None
+    question_id: UUID
+    question_code: str
+    question_text: str
+    question_type: str
+    is_scorable: bool
+    card_id: UUID | None = None
+    section_code: str | None = None
+    section_title: str | None = None
+    pillar_ids: list[UUID] = Field(default_factory=list)
+    response_text: str | None = None
+    response_numeric: float | None = None
+    response_boolean: bool | None = None
+    response_date: date | None = None
+    response_json: Any | None = None
+    explanation_text: str | None = None

@@ -148,6 +148,10 @@ class ParticipantActionRead(BaseModel):
     created_at: datetime
 
 
+class ParticipantActionListItem(ParticipantActionRead):
+    participant_name: str
+
+
 class ProfessionalConnectionCreate(BaseModel):
     participant_id: UUID
     event_id: UUID
@@ -178,6 +182,10 @@ class ProfessionalConnectionRead(BaseModel):
     notes: str | None = None
     evidence_classification: str
     created_at: datetime
+
+
+class ProfessionalConnectionListItem(ProfessionalConnectionRead):
+    participant_name: str
 
 
 class ImpactOutcomeCreate(BaseModel):
@@ -227,6 +235,10 @@ class ImpactOutcomeRead(BaseModel):
     observed_at: date | None = None
     evidence_items: list[OutcomeEvidenceRead] = Field(default_factory=list)
     created_at: datetime
+
+
+class ImpactOutcomeListItem(ImpactOutcomeRead):
+    participant_name: str
 
 
 class ParticipantImpactSummary(BaseModel):

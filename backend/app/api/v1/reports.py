@@ -2,7 +2,7 @@
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query, Request, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -90,3 +90,80 @@ def export_participant_report(
         participant_id, event_id=event_id, export_format=fmt, actor=actor
     )
     return ok(result, request_id=getattr(request.state, "request_id", None))
+
+
+@router.get(
+    "/records",
+    summary="List report export history",
+    description="Returns paginated ReportRecord audit entries for previously generated or downloaded reports. Restricted to administrators.",
+)
+def list_report_records(
+    request: Request,
+    event_id: UUID | None = Query(default=None),
+    participant_id: UUID | None = Query(default=None),
+    report_type: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    actor: ActorContext = Depends(require_admin),
+):
+    items, total = ReportingService(db).list_report_records(
+        event_id=event_id,
+        participant_id=participant_id,
+        report_type=report_type,
+        limit=limit,
+        offset=offset,
+    )
+    return ok(
+        items,
+        meta={
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": (offset + len(items)) < total,
+        },
+        request_id=getattr(request.state, "request_id", None),
+    )
+
+
+@router.get(
+    "/events/{event_id}/download",
+    summary="Download an event impact report directly as JSON, CSV, or XLSX",
+    description="Generates and streams the requested report file directly as an HTTP download attachment. Safe for ephemeral filesystems. Restricted to administrators.",
+)
+def download_event_report(
+    event_id: UUID,
+    export_format: ExportFormat = Query(default=ExportFormat.CSV),
+    db: Session = Depends(get_db),
+    actor: ActorContext = Depends(require_admin),
+):
+    content, media_type, filename = ReportingService(db).render_event_report_download(
+        event_id, export_format=export_format, actor=actor
+    )
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get(
+    "/participants/{participant_id}/download",
+    summary="Download a participant impact report directly as JSON, CSV, or XLSX",
+    description="Generates and streams the participant impact report file directly as an HTTP download attachment. Restricted to administrators.",
+)
+def download_participant_report(
+    participant_id: UUID,
+    export_format: ExportFormat = Query(default=ExportFormat.CSV),
+    event_id: UUID | None = Query(default=None),
+    db: Session = Depends(get_db),
+    actor: ActorContext = Depends(require_admin),
+):
+    content, media_type, filename = ReportingService(db).render_participant_report_download(
+        participant_id, event_id=event_id, export_format=export_format, actor=actor
+    )
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

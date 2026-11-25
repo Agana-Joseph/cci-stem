@@ -19,6 +19,51 @@ from app.services.participant_service import ParticipantService
 router = APIRouter(prefix="/participants", tags=["Participants"])
 
 
+@router.get(
+    "",
+    summary="List participants directory",
+    description=(
+        "Returns a paginated, searchable, filterable participant directory including "
+        "registration, attendance, and assessment status indicators. Restricted to administrators."
+    ),
+)
+def list_participants(
+    request: Request,
+    q: str | None = Query(default=None, description="Search by name, email, phone, role, or organisation"),
+    event_id: UUID | None = Query(default=None, description="Filter to participants registered for an event"),
+    industry: str | None = Query(default=None, description="Filter by industry"),
+    attendance_status: str | None = Query(default=None, description="Filter by attendance status"),
+    has_assessment: bool | None = Query(default=None, description="Filter by whether an assessment was submitted"),
+    sort_by: str = Query(default="created_at", pattern=r"^(created_at|full_name|industry|organisation)$"),
+    sort_order: str = Query(default="desc", pattern=r"^(asc|desc)$"),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    actor: ActorContext = Depends(require_admin),
+):
+    items, total = ParticipantService(db).list_participants(
+        q=q,
+        event_id=event_id,
+        industry=industry,
+        attendance_status=attendance_status,
+        has_assessment=has_assessment,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        limit=limit,
+        offset=offset,
+    )
+    return ok(
+        [item.model_dump(mode="json") for item in items],
+        meta={
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": (offset + len(items)) < total,
+        },
+        request_id=getattr(request.state, "request_id", None),
+    )
+
+
 @router.post(
     "",
     status_code=status.HTTP_201_CREATED,

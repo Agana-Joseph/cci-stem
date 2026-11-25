@@ -2,7 +2,7 @@
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from app.analytics.service import AnalyticsService
@@ -89,4 +89,38 @@ def event_follow_ups(
     actor: ActorContext = Depends(require_admin),
 ):
     data = AnalyticsService(db).get_follow_up_analytics(event_id)
+    return ok(data, request_id=getattr(request.state, "request_id", None))
+
+
+@router.get(
+    "/events/{event_id}/demographics",
+    summary="Participant industry, role, organisation, and experience demographics for an event",
+    description="Returns industry, professional role, organisation, and years-of-experience distributions with sample sizes and coverage indicators. Restricted to administrators.",
+)
+def event_demographics(
+    event_id: UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+    actor: ActorContext = Depends(require_admin),
+):
+    data = AnalyticsService(db).get_demographics_analytics(event_id)
+    return ok(data, request_id=getattr(request.state, "request_id", None))
+
+
+@router.get(
+    "/events/{event_id}/distributions",
+    summary="Per-question response distributions for an event",
+    description="Returns answer frequency distributions and numeric statistics per question with response counts and data coverage. Restricted to administrators.",
+)
+def event_distributions(
+    event_id: UUID,
+    request: Request,
+    questionnaire_id: UUID | None = Query(default=None),
+    question_id: UUID | None = Query(default=None),
+    db: Session = Depends(get_db),
+    actor: ActorContext = Depends(require_admin),
+):
+    data = AnalyticsService(db).get_question_distributions(
+        event_id, questionnaire_id=questionnaire_id, question_id=question_id
+    )
     return ok(data, request_id=getattr(request.state, "request_id", None))

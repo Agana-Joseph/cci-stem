@@ -3,7 +3,7 @@
 from datetime import date, datetime, timedelta, timezone
 from uuid import UUID
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.enums import (
@@ -23,18 +23,25 @@ from app.models.impact import (
     ParticipantAction,
     ProfessionalConnection,
 )
+from app.models.participant import Participant
 from app.repositories.participant import EventRepository, ParticipantRepository
 from app.schemas.impact import (
     FollowUpScheduleCreate,
     FollowUpStageConfigCreate,
     FollowUpSubmitRequest,
     ImpactOutcomeCreate,
+    ImpactOutcomeListItem,
+    ImpactOutcomeRead,
     OutcomeEvidenceIn,
     OutcomeVerifyRequest,
     ParticipantActionCreate,
+    ParticipantActionListItem,
+    ParticipantActionRead,
     ParticipantActionUpdate,
     ParticipantImpactSummary,
     ProfessionalConnectionCreate,
+    ProfessionalConnectionListItem,
+    ProfessionalConnectionRead,
 )
 from app.scoring.service import ScoringService
 from app.services.audit_service import record_audit
@@ -567,6 +574,164 @@ class ImpactTrackingService:
             .options(selectinload(ImpactOutcome.evidence_items))
             .where(ImpactOutcome.id == outcome.id)
         ).scalar_one()
+
+    # --- Admin Listing Methods for Actions, Connections, and Outcomes ---
+    def list_actions(
+        self,
+        *,
+        event_id: UUID | None = None,
+        participant_id: UUID | None = None,
+        action_status: str | None = None,
+        action_category: str | None = None,
+        evidence_classification: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[ParticipantActionListItem], int]:
+        stmt = select(ParticipantAction, Participant.full_name).join(
+            Participant, Participant.id == ParticipantAction.participant_id
+        )
+        count_stmt = select(func.count(ParticipantAction.id))
+
+        if event_id is not None:
+            stmt = stmt.where(ParticipantAction.event_id == event_id)
+            count_stmt = count_stmt.where(ParticipantAction.event_id == event_id)
+        if participant_id is not None:
+            stmt = stmt.where(ParticipantAction.participant_id == participant_id)
+            count_stmt = count_stmt.where(
+                ParticipantAction.participant_id == participant_id
+            )
+        if action_status is not None:
+            stmt = stmt.where(ParticipantAction.action_status == action_status)
+            count_stmt = count_stmt.where(ParticipantAction.action_status == action_status)
+        if action_category is not None:
+            stmt = stmt.where(ParticipantAction.action_category == action_category)
+            count_stmt = count_stmt.where(
+                ParticipantAction.action_category == action_category
+            )
+        if evidence_classification is not None:
+            stmt = stmt.where(
+                ParticipantAction.evidence_classification == evidence_classification
+            )
+            count_stmt = count_stmt.where(
+                ParticipantAction.evidence_classification == evidence_classification
+            )
+
+        total = int(self.db.execute(count_stmt).scalar_one())
+        rows = self.db.execute(
+            stmt.order_by(ParticipantAction.created_at.desc()).limit(limit).offset(offset)
+        ).all()
+        items = [
+            ParticipantActionListItem(
+                **ParticipantActionRead.model_validate(action).model_dump(),
+                participant_name=p_name,
+            )
+            for action, p_name in rows
+        ]
+        return items, total
+
+    def list_connections(
+        self,
+        *,
+        event_id: UUID | None = None,
+        participant_id: UUID | None = None,
+        connection_type: str | None = None,
+        evidence_classification: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[ProfessionalConnectionListItem], int]:
+        stmt = select(ProfessionalConnection, Participant.full_name).join(
+            Participant, Participant.id == ProfessionalConnection.participant_id
+        )
+        count_stmt = select(func.count(ProfessionalConnection.id))
+
+        if event_id is not None:
+            stmt = stmt.where(ProfessionalConnection.event_id == event_id)
+            count_stmt = count_stmt.where(ProfessionalConnection.event_id == event_id)
+        if participant_id is not None:
+            stmt = stmt.where(ProfessionalConnection.participant_id == participant_id)
+            count_stmt = count_stmt.where(
+                ProfessionalConnection.participant_id == participant_id
+            )
+        if connection_type is not None:
+            stmt = stmt.where(ProfessionalConnection.connection_type == connection_type)
+            count_stmt = count_stmt.where(
+                ProfessionalConnection.connection_type == connection_type
+            )
+        if evidence_classification is not None:
+            stmt = stmt.where(
+                ProfessionalConnection.evidence_classification == evidence_classification
+            )
+            count_stmt = count_stmt.where(
+                ProfessionalConnection.evidence_classification == evidence_classification
+            )
+
+        total = int(self.db.execute(count_stmt).scalar_one())
+        rows = self.db.execute(
+            stmt.order_by(ProfessionalConnection.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        ).all()
+        items = [
+            ProfessionalConnectionListItem(
+                **ProfessionalConnectionRead.model_validate(conn).model_dump(),
+                participant_name=p_name,
+            )
+            for conn, p_name in rows
+        ]
+        return items, total
+
+    def list_outcomes(
+        self,
+        *,
+        event_id: UUID | None = None,
+        participant_id: UUID | None = None,
+        outcome_type: str | None = None,
+        evidence_classification: str | None = None,
+        verification_status: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[ImpactOutcomeListItem], int]:
+        stmt = (
+            select(ImpactOutcome, Participant.full_name)
+            .join(Participant, Participant.id == ImpactOutcome.participant_id)
+            .options(selectinload(ImpactOutcome.evidence_items))
+        )
+        count_stmt = select(func.count(ImpactOutcome.id))
+
+        if event_id is not None:
+            stmt = stmt.where(ImpactOutcome.event_id == event_id)
+            count_stmt = count_stmt.where(ImpactOutcome.event_id == event_id)
+        if participant_id is not None:
+            stmt = stmt.where(ImpactOutcome.participant_id == participant_id)
+            count_stmt = count_stmt.where(ImpactOutcome.participant_id == participant_id)
+        if outcome_type is not None:
+            stmt = stmt.where(ImpactOutcome.outcome_type == outcome_type)
+            count_stmt = count_stmt.where(ImpactOutcome.outcome_type == outcome_type)
+        if evidence_classification is not None:
+            stmt = stmt.where(
+                ImpactOutcome.evidence_classification == evidence_classification
+            )
+            count_stmt = count_stmt.where(
+                ImpactOutcome.evidence_classification == evidence_classification
+            )
+        if verification_status is not None:
+            stmt = stmt.where(ImpactOutcome.verification_status == verification_status)
+            count_stmt = count_stmt.where(
+                ImpactOutcome.verification_status == verification_status
+            )
+
+        total = int(self.db.execute(count_stmt).scalar_one())
+        rows = self.db.execute(
+            stmt.order_by(ImpactOutcome.created_at.desc()).limit(limit).offset(offset)
+        ).all()
+        items = [
+            ImpactOutcomeListItem(
+                **ImpactOutcomeRead.model_validate(outcome).model_dump(),
+                participant_name=p_name,
+            )
+            for outcome, p_name in rows
+        ]
+        return items, total
 
     # --- Participant Holistic Impact View (/participants/{id}/impact) ---
     def get_participant_impact_summary(

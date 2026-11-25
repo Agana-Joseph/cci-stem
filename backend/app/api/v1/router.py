@@ -3,6 +3,7 @@
 from fastapi import APIRouter
 
 from app.api.v1 import (
+    admin,
     analytics,
     assessments,
     events,
@@ -16,6 +17,7 @@ from app.api.v1 import (
 )
 
 api_v1_router = APIRouter()
+api_v1_router.include_router(admin.router)
 api_v1_router.include_router(participants.router)
 api_v1_router.include_router(events.router)
 api_v1_router.include_router(question_cards.router)
