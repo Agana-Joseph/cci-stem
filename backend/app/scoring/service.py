@@ -11,7 +11,12 @@ from app.core.exceptions import ConflictError, NotFoundError, ValidationAppError
 from app.core.security import ActorContext
 from app.models.impact import FollowUpSubmission, ImpactOutcome, ParticipantAction
 from app.models.participant import EventRegistration
-from app.models.questionnaire import AssessmentResponse, AssessmentSubmission, Question
+from app.models.questionnaire import (
+    AssessmentResponse,
+    AssessmentSubmission,
+    Question,
+    QuestionnaireQuestion,
+)
 from app.models.scoring import (
     MeasurementPillar,
     ParticipantDimensionScore,
@@ -316,10 +321,12 @@ class ScoringService:
     ) -> ParticipantImpactScoreRead:
         if self.participant_repo.get_by_id(participant_id) is None:
             raise NotFoundError("Participant", participant_id)
-        if self.event_repo.get_by_id(event_id) is None:
+        event_obj = self.event_repo.get_by_id(event_id)
+        if event_obj is None:
             raise NotFoundError("Event", event_id)
 
-        fw = self._load_framework(framework_id)
+        effective_fw_id = framework_id or event_obj.active_framework_id
+        fw = self._load_framework(effective_fw_id)
 
         # Fetch relevant submissions (specific submission or all submissions for participant+event)
         sub_stmt = (
@@ -339,11 +346,30 @@ class ScoringService:
 
         # Latest response per question wins across multiple submissions for the same event
         responses_by_qid: dict[UUID, AssessmentResponse] = {}
+        submitted_qn_ids: set[UUID] = set()
         for sub in submissions:
+            submitted_qn_ids.add(sub.questionnaire_id)
             for resp in sub.responses:
                 responses_by_qid[resp.question_id] = resp
 
-        rule_qids = {r.question_id for r in fw.rules}
+        # Scope scoring rules to the submitted questionnaire(s) so rules from other
+        # questionnaire versions/stages do not unfairly lower completeness_ratio
+        scoped_rules = list(fw.rules)
+        if submitted_qn_ids:
+            qn_qids = set(
+                self.db.execute(
+                    select(QuestionnaireQuestion.question_id).where(
+                        QuestionnaireQuestion.questionnaire_id.in_(submitted_qn_ids)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            matching_rules = [r for r in fw.rules if r.question_id in qn_qids]
+            if matching_rules:
+                scoped_rules = matching_rules
+
+        rule_qids = {r.question_id for r in scoped_rules}
         questions_by_id: dict[UUID, Question] = {}
         if rule_qids:
             q_rows = (
@@ -392,7 +418,7 @@ class ScoringService:
         computed = calculate_impact_score(
             framework=fw,
             dimensions=fw.dimensions,
-            rules=fw.rules,
+            rules=scoped_rules,
             responses_by_question_id=responses_by_qid,
             questions_by_id=questions_by_id,
             follow_up_submissions=follow_ups,

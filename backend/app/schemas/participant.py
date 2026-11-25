@@ -125,26 +125,62 @@ class ParticipantImportReport(BaseModel):
     preview_records: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class EventObjectiveRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    objective_text: str
+    display_order: int
+
+
 class EventCreate(BaseModel):
     slug: str = Field(..., min_length=2, max_length=120, pattern=r"^[a-z0-9-]+$")
     title: str = Field(..., min_length=2, max_length=240)
+    headline: str | None = Field(default=None, max_length=240)
     description: str | None = None
+    introduction: str | None = None
+    event_category: str | None = Field(default=None, max_length=160)
     event_type: str = Field(default="networking_and_knowledge_sharing", max_length=80)
-    event_date: date
+    event_date: date | None = None
     end_date: date | None = None
     location: str | None = Field(default=None, max_length=240)
     status: EventStatus = EventStatus.ACTIVE
+    is_default: bool = False
+    assessment_enabled: bool = True
+    follow_up_enabled: bool = True
+    public_visibility: bool = True
+    reflection_cards_enabled: bool = True
+    immediate_assessment_enabled: bool = True
+    follow_up_30d_enabled: bool = True
+    follow_up_60d_enabled: bool = True
+    follow_up_90d_enabled: bool = True
+    default_questionnaire_id: UUID | None = None
+    active_framework_id: UUID | None = None
     metadata_json: dict[str, Any] | None = None
 
 
 class EventUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=2, max_length=240)
+    headline: str | None = Field(default=None, max_length=240)
     description: str | None = None
+    introduction: str | None = None
+    event_category: str | None = Field(default=None, max_length=160)
     event_type: str | None = Field(default=None, max_length=80)
     event_date: date | None = None
     end_date: date | None = None
     location: str | None = Field(default=None, max_length=240)
     status: EventStatus | None = None
+    is_default: bool | None = None
+    assessment_enabled: bool | None = None
+    follow_up_enabled: bool | None = None
+    public_visibility: bool | None = None
+    reflection_cards_enabled: bool | None = None
+    immediate_assessment_enabled: bool | None = None
+    follow_up_30d_enabled: bool | None = None
+    follow_up_60d_enabled: bool | None = None
+    follow_up_90d_enabled: bool | None = None
+    default_questionnaire_id: UUID | None = None
+    active_framework_id: UUID | None = None
     metadata_json: dict[str, Any] | None = None
 
 
@@ -154,12 +190,27 @@ class EventRead(BaseModel):
     id: UUID
     slug: str
     title: str
+    headline: str | None = None
     description: str | None = None
+    introduction: str | None = None
+    event_category: str | None = None
     event_type: str
-    event_date: date
+    event_date: date | None = None
     end_date: date | None = None
     location: str | None = None
     status: str
+    is_default: bool = False
+    assessment_enabled: bool = True
+    follow_up_enabled: bool = True
+    public_visibility: bool = True
+    reflection_cards_enabled: bool = True
+    immediate_assessment_enabled: bool = True
+    follow_up_30d_enabled: bool = True
+    follow_up_60d_enabled: bool = True
+    follow_up_90d_enabled: bool = True
+    default_questionnaire_id: UUID | None = None
+    active_framework_id: UUID | None = None
+    objectives: list[EventObjectiveRead] = Field(default_factory=list)
     metadata_json: dict[str, Any] | None = None
     created_at: datetime
     updated_at: datetime

@@ -744,6 +744,154 @@ class EventService:
             raise NotFoundError("Event", event_id)
         return event
 
+    def get_default_event_bundle(self) -> dict[str, Any]:
+        from app.models.impact import FollowUpStageConfig
+        from app.models.questionnaire import QuestionCategory
+        from app.models.scoring import MeasurementPillar, ScoringDimension, ScoringFramework
+        from app.schemas.impact import FollowUpStageConfigRead
+        from app.schemas.participant import EventObjectiveRead, EventRead
+        from app.schemas.questionnaire import QuestionCategoryRead
+        from app.schemas.scoring import MeasurementPillarRead
+        from app.services.questionnaire_service import QuestionEngineService
+        from sqlalchemy.orm import selectinload
+
+        event = self.repo.get_default_event()
+        if event is None:
+            raise NotFoundError("Default Event")
+
+        q_svc = QuestionEngineService(self.db)
+        default_qn = None
+        if event.default_questionnaire_id is not None:
+            try:
+                default_qn = q_svc.get_questionnaire(event.default_questionnaire_id).model_dump(
+                    mode="json"
+                )
+            except NotFoundError:
+                default_qn = None
+
+        all_event_qns = q_svc.list_questionnaires(
+            event_id=event.id, status="published"
+        )
+        follow_up_qns = [
+            qn.model_dump(mode="json")
+            for qn in all_event_qns
+            if qn.questionnaire_type == "follow_up"
+        ]
+
+        # Event-linked pillars (fallback to all active pillars)
+        linked_pillar_ids = [ep.pillar_id for ep in event.event_pillars if ep.is_active]
+        if linked_pillar_ids:
+            pillars = list(
+                self.db.execute(
+                    select(MeasurementPillar)
+                    .where(
+                        MeasurementPillar.id.in_(linked_pillar_ids),
+                        MeasurementPillar.is_active.is_(True),
+                    )
+                    .order_by(MeasurementPillar.display_order.asc())
+                )
+                .scalars()
+                .all()
+            )
+        else:
+            pillars = list(
+                self.db.execute(
+                    select(MeasurementPillar)
+                    .where(MeasurementPillar.is_active.is_(True))
+                    .order_by(MeasurementPillar.display_order.asc())
+                )
+                .scalars()
+                .all()
+            )
+
+        categories = list(
+            self.db.execute(
+                select(QuestionCategory)
+                .where(QuestionCategory.is_active.is_(True))
+                .order_by(QuestionCategory.display_order.asc())
+            )
+            .scalars()
+            .all()
+        )
+
+        reflection_cards = (
+            [c.model_dump(mode="json") for c in q_svc.list_cards(include_inactive=False)]
+            if event.reflection_cards_enabled
+            else []
+        )
+
+        stages = list(
+            self.db.execute(
+                select(FollowUpStageConfig)
+                .where(
+                    FollowUpStageConfig.is_active.is_(True),
+                    or_(
+                        FollowUpStageConfig.event_id == event.id,
+                        FollowUpStageConfig.event_id.is_(None),
+                    ),
+                )
+                .order_by(
+                    FollowUpStageConfig.days_after_event.asc(),
+                    FollowUpStageConfig.display_order.asc(),
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+        fw_summary = None
+        if event.active_framework_id is not None:
+            fw = self.db.execute(
+                select(ScoringFramework)
+                .options(
+                    selectinload(ScoringFramework.dimensions).selectinload(
+                        ScoringDimension.pillar
+                    )
+                )
+                .where(ScoringFramework.id == event.active_framework_id)
+            ).scalar_one_or_none()
+            if fw is not None:
+                fw_summary = {
+                    "id": str(fw.id),
+                    "name": fw.name,
+                    "version": fw.version,
+                    "is_active": fw.is_active,
+                    "dimensions": [
+                        {
+                            "pillar_id": str(d.pillar_id),
+                            "pillar_code": d.pillar.code if d.pillar else None,
+                            "pillar_name": d.pillar.name if d.pillar else None,
+                            "weight": d.weight,
+                            "impact_category": d.impact_category,
+                        }
+                        for d in fw.dimensions
+                    ],
+                }
+
+        return {
+            "event": EventRead.model_validate(event).model_dump(mode="json"),
+            "objectives": [
+                EventObjectiveRead.model_validate(o).model_dump(mode="json")
+                for o in event.objectives
+            ],
+            "measurement_pillars": [
+                MeasurementPillarRead.model_validate(p).model_dump(mode="json")
+                for p in pillars
+            ],
+            "question_categories": [
+                QuestionCategoryRead.model_validate(c).model_dump(mode="json")
+                for c in categories
+            ],
+            "default_questionnaire": default_qn,
+            "reflection_cards": reflection_cards,
+            "assessment_stages": [
+                FollowUpStageConfigRead.model_validate(s).model_dump(mode="json")
+                for s in stages
+            ],
+            "follow_up_questionnaires": follow_up_qns,
+            "active_framework": fw_summary,
+        }
+
     def list_events(
         self, *, status: str | None = None, limit: int = 50, offset: int = 0
     ) -> tuple[list[Event], int]:

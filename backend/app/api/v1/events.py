@@ -12,6 +12,7 @@ from app.schemas.participant import (
     AttendanceRead,
     AttendanceUpsert,
     EventCreate,
+    EventObjectiveRead,
     EventRead,
     EventUpdate,
     RegistrationCreate,
@@ -69,9 +70,26 @@ def list_events(
 
 
 @router.get(
+    "/default",
+    summary="Get default published CCI STEM Connect event and full assessment configuration",
+    description=(
+        "Returns the default published event along with its objectives, six measurement pillars, "
+        "question categories, published initial questionnaire (Sections A–F), reflection cards, "
+        "all four assessment stages, and 30/60/90-day follow-up questionnaires without exposing any participant PII."
+    ),
+)
+def get_default_event(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    bundle = EventService(db).get_default_event_bundle()
+    return ok(bundle, request_id=getattr(request.state, "request_id", None))
+
+
+@router.get(
     "/{event_id}",
     summary="Get event details",
-    description="Returns metadata for a single event.",
+    description="Returns metadata and objectives for a single event.",
 )
 def get_event(
     event_id: UUID,
@@ -81,6 +99,24 @@ def get_event(
     event = EventService(db).get_event(event_id)
     return ok(
         EventRead.model_validate(event).model_dump(mode="json"),
+        request_id=getattr(request.state, "request_id", None),
+    )
+
+
+@router.get(
+    "/{event_id}/objectives",
+    summary="List event objectives",
+    description="Returns ordered objectives for an event.",
+)
+def list_event_objectives(
+    event_id: UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    event = EventService(db).get_event(event_id)
+    return ok(
+        [EventObjectiveRead.model_validate(o).model_dump(mode="json") for o in event.objectives],
+        meta={"total": len(event.objectives)},
         request_id=getattr(request.state, "request_id", None),
     )
 

@@ -21,7 +21,7 @@ class FollowUpStageConfigCreate(BaseModel):
     event_id: UUID | None = None
     stage_code: str = Field(..., min_length=2, max_length=40, pattern=r"^[a-z0-9_-]+$")
     stage_name: str = Field(..., min_length=2, max_length=120)
-    days_after_event: int = Field(..., ge=1, le=3650)
+    days_after_event: int = Field(..., ge=0, le=3650)
     questionnaire_id: UUID | None = None
     display_order: int = 0
 

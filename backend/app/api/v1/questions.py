@@ -8,10 +8,32 @@ from sqlalchemy.orm import Session
 from app.core.responses import ok
 from app.core.security import ActorContext, require_admin
 from app.database.session import get_db
-from app.schemas.questionnaire import QuestionCreate, QuestionUpdate
+from app.schemas.questionnaire import (
+    QuestionCategoryRead,
+    QuestionCreate,
+    QuestionUpdate,
+)
 from app.services.questionnaire_service import QuestionEngineService
 
 router = APIRouter(prefix="/questions", tags=["Questions"])
+categories_router = APIRouter(prefix="/question-categories", tags=["Questions"])
+
+
+@categories_router.get(
+    "",
+    summary="List question categories",
+    description="Returns active question categories used to organise and filter questions.",
+)
+def list_question_categories(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    items = QuestionEngineService(db).list_categories()
+    return ok(
+        [QuestionCategoryRead.model_validate(c).model_dump(mode="json") for c in items],
+        meta={"total": len(items)},
+        request_id=getattr(request.state, "request_id", None),
+    )
 
 
 @router.post(

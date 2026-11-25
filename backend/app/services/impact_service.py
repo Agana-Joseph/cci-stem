@@ -124,27 +124,33 @@ class ImpactTrackingService:
             if cfg.stage_code not in deduped_stages or cfg.event_id is not None:
                 deduped_stages[cfg.stage_code] = cfg
 
+        base_date = event.event_date or date.today()
         targets: list[tuple[str, FollowUpStageConfig | None, date]] = []
         if payload.follow_up_stage:
             cfg = deduped_stages.get(payload.follow_up_stage)
             due = (
                 payload.due_date
                 or (
-                    event.event_date + timedelta(days=cfg.days_after_event)
+                    base_date + timedelta(days=cfg.days_after_event)
                     if cfg
-                    else event.event_date + timedelta(days=30)
+                    else base_date + timedelta(days=30)
                 )
             )
             targets.append((payload.follow_up_stage, cfg, due))
         else:
-            if not deduped_stages:
+            post_event_stages = {
+                code: cfg
+                for code, cfg in deduped_stages.items()
+                if cfg.days_after_event > 0
+            }
+            if not post_event_stages:
                 raise ValidationAppError(
                     "No active follow-up stage configurations found. Specify follow_up_stage explicitly."
                 )
             for code, cfg in sorted(
-                deduped_stages.items(), key=lambda kv: kv[1].days_after_event
+                post_event_stages.items(), key=lambda kv: kv[1].days_after_event
             ):
-                due = event.event_date + timedelta(days=cfg.days_after_event)
+                due = base_date + timedelta(days=cfg.days_after_event)
                 targets.append((code, cfg, due))
 
         created: list[FollowUpSchedule] = []

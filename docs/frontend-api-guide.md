@@ -114,7 +114,7 @@ All non-`/health` responses include `X-Request-ID` and `X-RateLimit-Remaining` h
 ## 4. Shared Enums (TypeScript Reference)
 
 ```ts
-export type EventStatus = "draft" | "active" | "completed" | "archived";
+export type EventStatus = "draft" | "published" | "active" | "completed" | "archived";
 export type RegistrationSource = "form" | "whatsapp" | "manual" | "import";
 export type RegistrationStatus = "registered" | "confirmed" | "cancelled" | "waitlisted";
 export type AttendanceStatus = "confirmed" | "partial" | "absent" | "unverified";
@@ -122,6 +122,8 @@ export type AttendanceStatus = "confirmed" | "partial" | "absent" | "unverified"
 export type QuestionType =
   | "short_text"
   | "long_text"
+  | "email"
+  | "phone"
   | "single_choice"
   | "multiple_choice"
   | "yes_no"
@@ -197,6 +199,21 @@ export type ExportFormat = "json" | "csv" | "xlsx";
 ---
 
 ## 6. Events (`/api/v1/events`)
+
+### 6.0 Get Default Published Event Bundle — `GET /api/v1/events/default`
+- **Access:** Public
+- **Status:** `200 OK`
+- **Purpose:** Single bootstrap call for the participant-facing frontend — automatically retrieves the default published **CCI STEM Connect** event without manual event selection.
+- **Response `data`:**
+  - `event`: `EventRead` (includes `headline`, `introduction`, `event_category`, `status: "published"`, `is_default: true`, feature flags, and `objectives[]`)
+  - `objectives`: `EventObjectiveRead[]` (7 ordered event objectives)
+  - `measurement_pillars`: `MeasurementPillarRead[]` (6 pillars linked via `event_pillars`)
+  - `question_categories`: `QuestionCategoryRead[]` (9 configured categories; also at `GET /api/v1/question-categories`)
+  - `default_questionnaire`: `QuestionnaireRead` (`cci-stem-connect-initial-assessment` — Sections A–F, 35 questions + answer options)
+  - `reflection_cards`: `QuestionCardRead[]` (3 original reflection cards with preserved wording)
+  - `assessment_stages`: `FollowUpStageConfigRead[]` (4 stages: `immediate`, `30_day`, `60_day`, `90_day`)
+  - `follow_up_questionnaires`: `QuestionnaireRead[]` (30-day, 60-day, and 90-day published questionnaires)
+  - `active_framework`: Public summary `{ id, name, version, is_active, dimensions[] }`
 
 ### 6.1 List Events — `GET /api/v1/events`
 - **Access:** Public

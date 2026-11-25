@@ -18,6 +18,8 @@ from app.models.impact import (
 from app.models.participant import (
     AttendanceRecord,
     Event,
+    EventObjective,
+    EventPillar,
     EventRegistration,
     Participant,
 )
@@ -26,6 +28,7 @@ from app.models.questionnaire import (
     AssessmentSubmission,
     Question,
     QuestionCard,
+    QuestionCategory,
     Questionnaire,
     QuestionnaireQuestion,
     QuestionnaireSection,
@@ -44,8 +47,11 @@ from app.models.scoring import (
 __all__ = [
     "Participant",
     "Event",
+    "EventObjective",
+    "EventPillar",
     "EventRegistration",
     "AttendanceRecord",
+    "QuestionCategory",
     "QuestionCard",
     "Question",
     "QuestionPillarMapping",

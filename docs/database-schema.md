@@ -1,6 +1,6 @@
 # Database Schema — CCI STEM Connect (PostgreSQL)
 
-All 30 tables use `UUID` primary keys, UTC timezone-aware timestamps (`created_at`, `updated_at`), foreign-key constraints with explicit `ON DELETE` rules, and targeted indexes.
+All 33 tables use `UUID` primary keys, UTC timezone-aware timestamps (`created_at`, `updated_at`), foreign-key constraints with explicit `ON DELETE` rules, and targeted indexes.
 
 ## Table Groups
 
@@ -8,18 +8,21 @@ All 30 tables use `UUID` primary keys, UTC timezone-aware timestamps (`created_a
 | Table | Purpose | Key Constraints & Indexes |
 |---|---|---|
 | `participants` | Core participant profile (no password/auth columns) | `CHECK (email_normalised IS NOT NULL OR phone_normalised IS NOT NULL)`, unique + indexed `phone_normalised`, unique + indexed `email_normalised` |
-| `events` | Event catalog | Unique indexed `slug`, indexed `event_date` |
+| `events` | Event catalog, default published event flag (`is_default`), headline, introduction, category, feature flags, `default_questionnaire_id`, `active_framework_id` | Unique indexed `slug`, indexed `is_default`, nullable `event_date` |
+| `event_objectives` | Ordered event objectives for public display and reporting | `UNIQUE (event_id, display_order)`, FK `event_id` (`CASCADE`) |
+| `event_pillars` | Associates configurable measurement pillars with specific events | `UNIQUE (event_id, pillar_id)`, FKs `event_id`, `pillar_id` (`CASCADE`) |
 | `event_registrations` | Unique participant registration per event (allows repeat attendance across multiple events) | `UNIQUE (event_id, participant_id)`, indexed `event_id`, `participant_id` |
 | `attendance_records` | Verified attendance status (`confirmed`, `partial`, `absent`, `unverified`) | `UNIQUE (event_id, participant_id)`, indexed `event_id`, `participant_id` |
 
 ### 2. Question & Assessment Management
 | Table | Purpose | Key Constraints & Indexes |
 |---|---|---|
-| `question_cards` | Reflective or topical question card groupings | Unique indexed `code` |
-| `questions` | Configurable question bank (8 types + `allow_explanation` + `is_scorable` + soft archive) | Unique indexed `code`, FK `card_id` |
+| `question_categories` | Configurable question categories (9 seeded categories for filtering & organisation) | Unique indexed `code` |
+| `question_cards` | Reflective or topical question card groupings (3 original reflection cards preserved) | Unique indexed `code` |
+| `questions` | Configurable question bank (10 types incl. `email` & `phone` + `allow_explanation` + `is_scorable` + soft archive) | Unique indexed `code`, FKs `card_id`, `category_id` (`SET NULL`) |
 | `question_pillar_mappings` | Many-to-many assignment of questions to one or more measurement pillars | `UNIQUE (question_id, pillar_id)` |
 | `question_options` | Configurable choices with optional `score_value` | FK `question_id` |
-| `questionnaires` | Versioned draft/published/archived assessment definitions | Unique indexed `code`, FK `event_id` |
+| `questionnaires` | Versioned draft/published/archived assessment definitions with `assessment_stage` (`immediate`, `30_day`, `60_day`, `90_day`) | Unique indexed `code`, FK `event_id` |
 | `questionnaire_sections` | Configurable assessment sections (e.g., Sections A–F) | `UNIQUE (questionnaire_id, code)` |
 | `questionnaire_questions` | Ordered attachment of bank questions into questionnaire sections | `UNIQUE (questionnaire_id, question_id)` |
 | `assessment_submissions` | Participant assessment submission header & completeness ratio | Indexed `participant_id`, `event_id`, `submitted_at` |

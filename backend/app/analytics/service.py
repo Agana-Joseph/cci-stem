@@ -226,7 +226,7 @@ class AnalyticsService:
             "event_id": str(event.id),
             "event_slug": event.slug,
             "event_title": event.title,
-            "event_date": event.event_date.isoformat(),
+            "event_date": event.event_date.isoformat() if event.event_date else None,
             "participation": {
                 "total_registered_participants": registered,
                 "total_confirmed_attendees": confirmed,

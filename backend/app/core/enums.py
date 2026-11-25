@@ -5,6 +5,7 @@ from enum import StrEnum
 
 class EventStatus(StrEnum):
     DRAFT = "draft"
+    PUBLISHED = "published"
     ACTIVE = "active"
     COMPLETED = "completed"
     ARCHIVED = "archived"
@@ -34,6 +35,8 @@ class AttendanceStatus(StrEnum):
 class QuestionType(StrEnum):
     SHORT_TEXT = "short_text"
     LONG_TEXT = "long_text"
+    EMAIL = "email"
+    PHONE = "phone"
     SINGLE_CHOICE = "single_choice"
     MULTIPLE_CHOICE = "multiple_choice"
     YES_NO = "yes_no"

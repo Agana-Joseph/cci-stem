@@ -50,7 +50,7 @@ class ReportingService:
                 "id": str(event.id),
                 "slug": event.slug,
                 "title": event.title,
-                "event_date": event.event_date.isoformat(),
+                "event_date": event.event_date.isoformat() if event.event_date else None,
                 "location": event.location,
                 "status": event.status,
             },

@@ -16,6 +16,7 @@ from app.models.questionnaire import (
     AssessmentSubmission,
     Question,
     QuestionCard,
+    QuestionCategory,
     Questionnaire,
     QuestionnaireQuestion,
     QuestionnaireSection,
@@ -55,6 +56,7 @@ def serialize_question(q: Question) -> QuestionRead:
     return QuestionRead(
         id=q.id,
         card_id=q.card_id,
+        category_id=q.category_id,
         code=q.code,
         question_text=q.question_text,
         description=q.description,
@@ -99,6 +101,7 @@ def serialize_questionnaire(qn: Questionnaire) -> QuestionnaireRead:
         title=qn.title,
         description=qn.description,
         questionnaire_type=qn.questionnaire_type,
+        assessment_stage=qn.assessment_stage,
         version=qn.version,
         status=qn.status,
         published_at=qn.published_at,
@@ -187,6 +190,17 @@ class QuestionEngineService:
             if self.db.get(MeasurementPillar, pid) is None:
                 raise NotFoundError("MeasurementPillar", pid)
 
+    def list_categories(self) -> list[QuestionCategory]:
+        return list(
+            self.db.execute(
+                select(QuestionCategory)
+                .where(QuestionCategory.is_active.is_(True))
+                .order_by(QuestionCategory.display_order.asc())
+            )
+            .scalars()
+            .all()
+        )
+
     def create_question(
         self, payload: QuestionCreate, *, actor: ActorContext
     ) -> QuestionRead:
@@ -198,6 +212,7 @@ class QuestionEngineService:
 
         question = Question(
             card_id=payload.card_id,
+            category_id=payload.category_id,
             code=payload.code,
             question_text=payload.question_text,
             description=payload.description,
@@ -403,6 +418,7 @@ class QuestionEngineService:
             title=payload.title,
             description=payload.description,
             questionnaire_type=payload.questionnaire_type.value,
+            assessment_stage=payload.assessment_stage,
             version=payload.version,
             status=QuestionnaireStatus.DRAFT.value,
         )
@@ -505,6 +521,16 @@ class QuestionEngineService:
         qtype = question.question_type
         if qtype in {QuestionType.SHORT_TEXT.value, QuestionType.LONG_TEXT.value}:
             return bool(resp.response_text and resp.response_text.strip())
+        if qtype == QuestionType.EMAIL.value:
+            if not (resp.response_text and resp.response_text.strip()):
+                return False
+            normalise_email(resp.response_text)
+            return True
+        if qtype == QuestionType.PHONE.value:
+            if not (resp.response_text and resp.response_text.strip()):
+                return False
+            normalise_phone(resp.response_text)
+            return True
         if qtype == QuestionType.YES_NO.value:
             return resp.response_boolean is not None
         if qtype in {QuestionType.RATING_SCALE.value, QuestionType.NUMERIC.value}:

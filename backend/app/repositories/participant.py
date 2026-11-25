@@ -3,11 +3,14 @@
 from uuid import UUID
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
+from app.core.enums import EventStatus
 from app.models.participant import (
     AttendanceRecord,
     Event,
+    EventObjective,
+    EventPillar,
     EventRegistration,
     Participant,
 )
@@ -66,17 +69,46 @@ class EventRepository:
         self.db = db
 
     def get_by_id(self, event_id: UUID) -> Event | None:
-        return self.db.get(Event, event_id)
+        return self.db.execute(
+            select(Event)
+            .options(
+                selectinload(Event.objectives),
+                selectinload(Event.event_pillars),
+            )
+            .where(Event.id == event_id)
+        ).scalar_one_or_none()
 
     def get_by_slug(self, slug: str) -> Event | None:
         return self.db.execute(
-            select(Event).where(Event.slug == slug)
+            select(Event)
+            .options(
+                selectinload(Event.objectives),
+                selectinload(Event.event_pillars),
+            )
+            .where(Event.slug == slug)
         ).scalar_one_or_none()
+
+    def get_default_event(self) -> Event | None:
+        stmt = (
+            select(Event)
+            .options(
+                selectinload(Event.objectives),
+                selectinload(Event.event_pillars),
+            )
+            .where(
+                Event.public_visibility.is_(True),
+                Event.status.in_(
+                    [EventStatus.PUBLISHED.value, EventStatus.ACTIVE.value]
+                ),
+            )
+            .order_by(Event.is_default.desc(), Event.created_at.desc())
+        )
+        return self.db.execute(stmt).scalars().first()
 
     def list_events(
         self, *, status: str | None = None, limit: int = 50, offset: int = 0
     ) -> tuple[list[Event], int]:
-        stmt = select(Event)
+        stmt = select(Event).options(selectinload(Event.objectives))
         count_stmt = select(func.count(Event.id))
         if status:
             stmt = stmt.where(Event.status == status)
@@ -84,7 +116,13 @@ class EventRepository:
         total = self.db.execute(count_stmt).scalar_one()
         items = (
             self.db.execute(
-                stmt.order_by(Event.event_date.desc()).limit(limit).offset(offset)
+                stmt.order_by(
+                    Event.is_default.desc(),
+                    Event.event_date.desc(),
+                    Event.created_at.desc(),
+                )
+                .limit(limit)
+                .offset(offset)
             )
             .scalars()
             .all()

@@ -5,14 +5,22 @@ from fastapi.testclient import TestClient
 
 def test_initial_seeded_question_card_and_reflective_questions(client: TestClient):
     cards = client.get("/api/v1/question-cards").json()["data"]
-    assert len(cards) >= 1
-    card = next(c for c in cards if c["code"] == "cci-stem-card-01")
-    texts = {q["question_text"] for q in card["questions"]}
+    assert len(cards) >= 3
+    by_code = {c["code"]: c for c in cards}
+    assert {"cci-stem-card-01", "cci-stem-card-02", "cci-stem-card-03"}.issubset(
+        by_code.keys()
+    )
+    reflective_questions = [
+        q
+        for code in ("cci-stem-card-01", "cci-stem-card-02", "cci-stem-card-03")
+        for q in by_code[code]["questions"]
+    ]
+    texts = {q["question_text"] for q in reflective_questions}
     assert "Which do you think matters more early in your tech career?" in texts
     assert "Which of your skills make your work easier?" in texts
     assert "What can you teach someone in 10 minutes?" in texts
     # Reflective discussion questions must be qualitative (not scorable)
-    for q in card["questions"]:
+    for q in reflective_questions:
         assert q["is_scorable"] is False
 
 

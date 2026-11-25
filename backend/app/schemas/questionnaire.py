@@ -9,6 +9,17 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.core.enums import QuestionType, QuestionnaireStatus, QuestionnaireType
 
 
+class QuestionCategoryRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    code: str
+    name: str
+    description: str | None = None
+    display_order: int
+    is_active: bool
+
+
 class QuestionOptionIn(BaseModel):
     option_value: str = Field(..., min_length=1, max_length=120)
     option_label: str = Field(..., min_length=1, max_length=300)
@@ -34,6 +45,7 @@ class QuestionCreate(BaseModel):
     description: str | None = None
     question_type: QuestionType = QuestionType.SHORT_TEXT
     card_id: UUID | None = None
+    category_id: UUID | None = None
     category: str | None = Field(default=None, max_length=100)
     is_required: bool = False
     is_scorable: bool = False
@@ -51,6 +63,7 @@ class QuestionUpdate(BaseModel):
     description: str | None = None
     question_type: QuestionType | None = None
     card_id: UUID | None = None
+    category_id: UUID | None = None
     category: str | None = Field(default=None, max_length=100)
     is_required: bool | None = None
     is_scorable: bool | None = None
@@ -68,6 +81,7 @@ class QuestionRead(BaseModel):
 
     id: UUID
     card_id: UUID | None = None
+    category_id: UUID | None = None
     code: str
     question_text: str
     description: str | None = None
@@ -141,6 +155,7 @@ class QuestionnaireCreate(BaseModel):
     description: str | None = None
     event_id: UUID | None = None
     questionnaire_type: QuestionnaireType = QuestionnaireType.POST_EVENT
+    assessment_stage: str | None = Field(default=None, max_length=40)
     version: str = Field(default="1.0", max_length=32)
     sections: list[QuestionnaireSectionIn] = Field(default_factory=list)
     questions: list[QuestionnaireQuestionLinkIn] = Field(default_factory=list)
@@ -151,6 +166,7 @@ class QuestionnaireUpdate(BaseModel):
     description: str | None = None
     event_id: UUID | None = None
     questionnaire_type: QuestionnaireType | None = None
+    assessment_stage: str | None = Field(default=None, max_length=40)
     version: str | None = Field(default=None, max_length=32)
     status: QuestionnaireStatus | None = None
     sections: list[QuestionnaireSectionIn] | None = None
@@ -185,6 +201,7 @@ class QuestionnaireRead(BaseModel):
     title: str
     description: str | None = None
     questionnaire_type: str
+    assessment_stage: str | None = None
     version: str
     status: str
     published_at: datetime | None = None

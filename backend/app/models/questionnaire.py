@@ -28,6 +28,18 @@ from app.core.enums import (
 from app.database.base import Base, JSONBType, TimestampMixin, UUIDPrimaryKeyMixin, utc_now
 
 
+class QuestionCategory(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """Configurable question categories for organising, filtering, and managing questions."""
+
+    __tablename__ = "question_categories"
+
+    code: Mapped[str] = mapped_column(String(80), unique=True, nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    display_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+
 class QuestionCard(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "question_cards"
 
@@ -50,6 +62,11 @@ class Question(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     card_id: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True),
         ForeignKey("question_cards.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    category_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("question_categories.id", ondelete="SET NULL"),
         nullable=True,
     )
     code: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
@@ -140,6 +157,7 @@ class Questionnaire(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     questionnaire_type: Mapped[str] = mapped_column(
         String(40), default=QuestionnaireType.POST_EVENT.value, nullable=False
     )
+    assessment_stage: Mapped[str | None] = mapped_column(String(40), nullable=True)
     version: Mapped[str] = mapped_column(String(32), default="1.0", nullable=False)
     status: Mapped[str] = mapped_column(
         String(32), default=QuestionnaireStatus.DRAFT.value, nullable=False
