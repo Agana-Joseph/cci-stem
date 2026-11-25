@@ -1,0 +1,40 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: cci-stem-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-cci_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cci_password}
+      POSTGRES_DB: ${POSTGRES_DB:-cci_stem_connect}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cci_user} -d ${POSTGRES_DB:-cci_stem_connect}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: cci-stem-backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-cci_user}:${POSTGRES_PASSWORD:-cci_password}@postgres:5432/${POSTGRES_DB:-cci_stem_connect}
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - report_exports:/app/storage/reports
+
+volumes:
+  postgres_data:
+  report_exports:
