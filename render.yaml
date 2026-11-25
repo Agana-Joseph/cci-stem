@@ -1,0 +1,30 @@
+databases:
+  - name: cci-stem-db
+    databaseName: cci_stem_connect
+    user: cci_user
+    plan: free
+
+services:
+  - type: web
+    name: cci-stem-api
+    runtime: python
+    rootDir: backend
+    plan: free
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: alembic upgrade head && python -m app.database.seed && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.8"
+      - key: APP_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: cci-stem-db
+          property: connectionString
+      - key: ADMIN_API_KEY
+        generateValue: true
+      - key: DEFAULT_PHONE_REGION
+        value: NG
+      - key: CORS_ALLOWED_ORIGINS
+        value: '["http://localhost:3000"]'
