@@ -224,6 +224,7 @@ class AssessmentResponseIn(BaseModel):
 class ParticipantProfilePatch(BaseModel):
     """Optional Section A background details submitted alongside an assessment."""
 
+    full_name: str | None = Field(default=None, max_length=200)
     current_role: str | None = Field(default=None, max_length=160)
     industry: str | None = Field(default=None, max_length=160)
     organisation: str | None = Field(default=None, max_length=200)
@@ -234,6 +235,7 @@ class ParticipantProfilePatch(BaseModel):
 
 class AssessmentSubmitRequest(BaseModel):
     participant_id: UUID | None = None
+    full_name: str | None = Field(default=None, max_length=200)
     phone: str | None = None
     email: str | None = None
     event_id: UUID

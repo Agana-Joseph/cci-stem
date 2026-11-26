@@ -6,11 +6,17 @@ from uuid import UUID
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.core.enums import QuestionType, QuestionnaireStatus, SubmissionStatus
+from app.core.enums import (
+    QuestionType,
+    QuestionnaireStatus,
+    RegistrationSource,
+    RegistrationStatus,
+    SubmissionStatus,
+)
 from app.core.exceptions import ConflictError, NotFoundError, ValidationAppError
 from app.core.normalisation import normalise_email, normalise_phone
 from app.core.security import ActorContext
-from app.models.participant import Event, Participant
+from app.models.participant import Event, EventRegistration, Participant
 from app.models.questionnaire import (
     AssessmentResponse,
     AssessmentSubmission,
@@ -591,29 +597,12 @@ class QuestionEngineService:
                 "Assessments can only be submitted against a published questionnaire."
             )
 
-        # Identify participant via participant_id or registered phone/email
-        participant = None
-        if payload.participant_id is not None:
-            participant = self.participant_repo.get_by_id(payload.participant_id)
-        else:
-            phone_norm = normalise_phone(payload.phone) if payload.phone else None
-            email_norm = normalise_email(payload.email) if payload.email else None
-            participant, _ = self.participant_repo.find_by_contact(
-                phone_normalised=phone_norm, email_normalised=email_norm
-            )
-
-        if participant is None:
-            raise NotFoundError(
-                "Participant",
-                "matching the supplied identifier (contact registration required)",
-            )
-
+        # Validate ALL responses before creating/flushing any database records (atomic validation)
         qn_links = {link.question_id: link for link in qn.questionnaire_questions}
         answered_ids: set[UUID] = set()
         seen_q_ids: set[UUID] = set()
         validated_pairs: list[tuple[Question, AssessmentResponseIn]] = []
 
-        # Validate ALL responses before creating/flushing any database records (atomic validation)
         for resp_in in payload.responses:
             if resp_in.question_id in seen_q_ids:
                 raise ValidationAppError(
@@ -647,6 +636,114 @@ class QuestionEngineService:
                 details={"missing_question_codes": missing_required},
             )
 
+        # Extract fallback profile fields from Section A responses (when present)
+        resp_by_code = {q.code: (q, r) for q, r in validated_pairs}
+
+        def _text_for(code: str) -> str | None:
+            pair = resp_by_code.get(code)
+            if not pair:
+                return None
+            val = pair[1].response_text
+            return val.strip() if val and val.strip() else None
+
+        def _industry_from_section_a() -> str | None:
+            pair = resp_by_code.get("a5_industry_sector")
+            if not pair:
+                return None
+            q_obj, r_obj = pair
+            if r_obj.response_text == "other" and r_obj.explanation_text and r_obj.explanation_text.strip():
+                return r_obj.explanation_text.strip()
+            if r_obj.response_text:
+                label = next(
+                    (o.option_label for o in q_obj.options if o.option_value == r_obj.response_text),
+                    r_obj.response_text,
+                )
+                return label
+            return None
+
+        _yoe_bracket_map = {
+            "less_than_1_year": 0,
+            "1_2_years": 2,
+            "3_5_years": 4,
+            "6_10_years": 8,
+            "more_than_10_years": 12,
+        }
+
+        # Identify or auto-register participant via participant_id, phone, or email
+        now = datetime.now(timezone.utc)
+        participant = None
+        if payload.participant_id is not None:
+            participant = self.participant_repo.get_by_id(payload.participant_id)
+            if participant is None:
+                raise NotFoundError("Participant", payload.participant_id)
+        else:
+            raw_phone = payload.phone or _text_for("a3_active_phone_number")
+            raw_email = payload.email or _text_for("a2_email_address")
+            phone_norm = normalise_phone(raw_phone) if raw_phone else None
+            email_norm = normalise_email(raw_email) if raw_email else None
+            participant, _ = self.participant_repo.find_by_contact(
+                phone_normalised=phone_norm, email_normalised=email_norm
+            )
+
+            if participant is None:
+                if not phone_norm and not email_norm:
+                    raise ValidationAppError(
+                        "Provide a valid phone number or email address to register and submit."
+                    )
+                pu = payload.profile_updates
+                inferred_name = (
+                    (payload.full_name.strip() if payload.full_name and payload.full_name.strip() else None)
+                    or (pu.full_name.strip() if pu and pu.full_name and pu.full_name.strip() else None)
+                    or _text_for("a1_full_name")
+                    or (email_norm.split("@")[0] if email_norm else None)
+                    or "CCI STEM Participant"
+                )
+                inferred_role = (pu.current_role if pu and pu.current_role else None) or _text_for("a4_current_professional_role")
+                inferred_industry = (pu.industry if pu and pu.industry else None) or _industry_from_section_a()
+                inferred_org = (pu.organisation if pu and pu.organisation else None) or _text_for("a6_organisation")
+                inferred_reason = (pu.reason_for_attending if pu and pu.reason_for_attending else None) or _text_for("a8_motivation_to_attend")
+                inferred_yoe = (
+                    pu.years_of_experience
+                    if pu and pu.years_of_experience is not None
+                    else _yoe_bracket_map.get(_text_for("a7_years_of_experience") or "")
+                )
+                consent = bool(pu.consent_given) if pu and pu.consent_given is not None else True
+
+                participant = Participant(
+                    full_name=inferred_name,
+                    email_raw=raw_email.strip() if raw_email else None,
+                    email_normalised=email_norm,
+                    phone_raw=raw_phone.strip() if raw_phone else None,
+                    phone_normalised=phone_norm,
+                    current_role=inferred_role,
+                    industry=inferred_industry,
+                    organisation=inferred_org,
+                    years_of_experience=inferred_yoe,
+                    reason_for_attending=inferred_reason,
+                    data_source="self_assessment",
+                    consent_given=consent,
+                    consent_recorded_at=now if consent else None,
+                )
+                self.participant_repo.create(participant)
+                record_audit(
+                    self.db,
+                    actor=actor,
+                    action="participant.auto_register",
+                    resource_type="participant",
+                    resource_id=str(participant.id),
+                    details={"event_id": str(event.id), "channel": payload.submission_channel},
+                )
+            else:
+                # Safely enrich missing secondary contact if not owned by another participant
+                if not participant.email_normalised and email_norm:
+                    if self.participant_repo.get_by_email(email_norm) is None:
+                        participant.email_raw = raw_email.strip() if raw_email else None
+                        participant.email_normalised = email_norm
+                if not participant.phone_normalised and phone_norm:
+                    if self.participant_repo.get_by_phone(phone_norm) is None:
+                        participant.phone_raw = raw_phone.strip() if raw_phone else None
+                        participant.phone_normalised = phone_norm
+
         total_questions = len(qn_links)
         completeness_ratio = (
             round(len(answered_ids) / total_questions, 4) if total_questions > 0 else 0.0
@@ -659,7 +756,19 @@ class QuestionEngineService:
                 if val is not None:
                     setattr(participant, field, val)
             if p_updates.get("consent_given") is True and not participant.consent_recorded_at:
-                participant.consent_recorded_at = datetime.now(timezone.utc)
+                participant.consent_recorded_at = now
+
+        # Ensure participant is registered for this event automatically
+        if self.event_repo.get_registration(event.id, participant.id) is None:
+            self.db.add(
+                EventRegistration(
+                    event_id=event.id,
+                    participant_id=participant.id,
+                    registration_source=RegistrationSource.FORM.value,
+                    registration_status=RegistrationStatus.REGISTERED.value,
+                    reason_for_attending=participant.reason_for_attending,
+                )
+            )
 
         submission = AssessmentSubmission(
             participant_id=participant.id,

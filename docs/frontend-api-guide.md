@@ -592,7 +592,7 @@ const isRequired = item.is_required_override ?? item.question.is_required;
 - **Status:** `201 Created`
 - **Validation Rules (Atomic — all responses validated before saving):**
   - Questionnaire must have `status === "published"` (else `422`).
-  - Participant must already exist and match `participant_id`, `phone`, or `email` (else `404`).
+  - Matches existing participant by `participant_id`, normalised `phone`, or normalised `email`; if no participant exists for the supplied `phone`/`email`, **automatically registers the participant and their event registration** from `full_name`, `profile_updates`, and Section A answers.
   - Duplicate `question_id` entries in `responses` are rejected (`422`).
   - Every required question must be answered (else `422` with `details.missing_question_codes`).
 

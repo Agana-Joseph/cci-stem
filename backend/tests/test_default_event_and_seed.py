@@ -305,3 +305,112 @@ def test_default_event_end_to_end_submission_scoring_followups_and_privacy(
     assert client.get("/api/v1/participants").status_code == 401
     assert client.get("/api/v1/feedback").status_code == 401
     assert client.get(f"/api/v1/analytics/events/{event_id}/overview").status_code == 401
+
+
+def test_assessment_submit_auto_registers_new_participant_and_event_registration(
+    client: TestClient, admin_headers: dict[str, str]
+):
+    """First-time attendees hitting Submit Assessment are auto-registered without prior admin signup."""
+    bundle = client.get("/api/v1/events/default").json()["data"]
+    event_id = bundle["event"]["id"]
+    initial_qn = bundle["default_questionnaire"]
+    q_by_code = {item["question"]["code"]: item["question"]["id"] for item in initial_qn["questions"]}
+
+    # Invalid submission (missing required questions) must NOT auto-register an orphan participant
+    bad = client.post(
+        "/api/v1/assessments/submit",
+        json={
+            "phone": "+2348099990000",
+            "email": "orphan@example.com",
+            "event_id": event_id,
+            "questionnaire_id": initial_qn["id"],
+            "responses": [],
+        },
+    )
+    assert bad.status_code == 422
+    lookup_orphan = client.get(
+        "/api/v1/participants/lookup",
+        headers=admin_headers,
+        params={"phone": "+2348099990000"},
+    )
+    assert lookup_orphan.json()["data"]["matched"] is False
+
+    # Valid submission from a brand-new unregistered attendee auto-creates participant + registration
+    responses = [
+        {"question_id": q_by_code["a1_full_name"], "response_text": "Agana Omahi"},
+        {"question_id": q_by_code["a2_email_address"], "response_text": "josephagana6@gmail.com"},
+        {"question_id": q_by_code["a3_active_phone_number"], "response_text": "+2348020898617"},
+        {"question_id": q_by_code["a4_current_professional_role"], "response_text": "Senior Engineer"},
+        {"question_id": q_by_code["a5_industry_sector"], "response_text": "business_and_entrepreneurship"},
+        {"question_id": q_by_code["a6_organisation"], "response_text": "Aceldus Technologies LTD"},
+        {"question_id": q_by_code["a7_years_of_experience"], "response_text": "6_10_years"},
+        {"question_id": q_by_code["a8_motivation_to_attend"], "response_text": "Networking and growth"},
+        {"question_id": q_by_code["b1_active_participation"], "response_numeric": 4},
+        {"question_id": q_by_code["b2_speaker_interaction"], "response_text": "no"},
+        {"question_id": q_by_code["b3_peer_interaction"], "response_numeric": 4},
+        {"question_id": q_by_code["b4_contributed_discussions"], "response_text": "yes_occasionally"},
+        {"question_id": q_by_code["b5_discussion_relevance"], "response_numeric": 4},
+        {"question_id": q_by_code["b6_overall_engagement"], "response_numeric": 4},
+        {"question_id": q_by_code["c1_most_important_insight"], "response_text": "To be excellent"},
+        {"question_id": q_by_code["c2_new_perspectives"], "response_text": "yes_to_some_extent"},
+        {"question_id": q_by_code["c3_understanding_excellence"], "response_numeric": 4},
+        {"question_id": q_by_code["c4_productivity_responsibility_influence"], "response_numeric": 4},
+        {"question_id": q_by_code["c5_decision_influencing_idea"], "response_text": "Be consistent"},
+        {"question_id": q_by_code["d1_describe_workplace_excellence"], "response_text": "Doing great work"},
+        {"question_id": q_by_code["d2_integrity_responsibility_importance"], "response_numeric": 5},
+        {"question_id": q_by_code["d3_recognition_rewards_importance"], "response_numeric": 4},
+        {"question_id": q_by_code["d4_unrecognised_excellence_consequences"], "response_text": "Demotivation"},
+        {"question_id": q_by_code["d5_organisations_encourage_excellence"], "response_text": "To appreciate"},
+        {"question_id": q_by_code["d6_personal_commitment_standards"], "response_numeric": 4},
+        {"question_id": q_by_code["e1_meaningful_connections"], "response_text": "yes_one_or_two"},
+        {"question_id": q_by_code["e2_collaboration_opportunities"], "response_text": "possibly"},
+        {"question_id": q_by_code["e3_mentorship_opportunities"], "response_text": "no"},
+        {"question_id": q_by_code["e4_followed_up_professionals"], "response_text": "no"},
+        {"question_id": q_by_code["f1_intended_idea_to_apply"], "response_text": "Be community active"},
+        {"question_id": q_by_code["f2_areas_to_improve"], "response_json": ["leadership", "work_ethic_and_discipline"]},
+        {"question_id": q_by_code["f3_intend_to_share_knowledge"], "response_text": "yes"},
+        {"question_id": q_by_code["f4_action_within_30_days"], "response_text": "Apply workplace excellence"},
+        {"question_id": q_by_code["f5_commitment_to_apply"], "response_numeric": 4},
+    ]
+    sub = client.post(
+        "/api/v1/assessments/submit",
+        json={
+            "phone": "+2348020898617",
+            "email": "josephagana6@gmail.com",
+            "event_id": event_id,
+            "questionnaire_id": initial_qn["id"],
+            "responses": responses,
+        },
+    )
+    assert sub.status_code == 201, sub.text
+    participant_id = sub.json()["data"]["participant_id"]
+
+    # Verify participant profile was auto-created and registered for CCI STEM Connect
+    p_profile = client.get(
+        f"/api/v1/participants/{participant_id}", headers=admin_headers
+    ).json()["data"]
+    assert p_profile["full_name"] == "Agana Omahi"
+    assert p_profile["email_normalised"] == "josephagana6@gmail.com"
+    assert p_profile["phone_normalised"] == "+2348020898617"
+    assert p_profile["current_role"] == "Senior Engineer"
+    assert p_profile["industry"] == "Business and Entrepreneurship"
+    assert p_profile["organisation"] == "Aceldus Technologies LTD"
+    assert p_profile["data_source"] == "self_assessment"
+
+    roster = client.get(
+        f"/api/v1/events/{event_id}/participants", headers=admin_headers
+    ).json()["data"]
+    assert any(r["participant_id"] == participant_id for r in roster)
+
+    # Re-submitting with the same phone reuses the same participant without creating duplicates
+    sub2 = client.post(
+        "/api/v1/assessments/submit",
+        json={
+            "phone": "08020898617",
+            "event_id": event_id,
+            "questionnaire_id": initial_qn["id"],
+            "responses": responses,
+        },
+    )
+    assert sub2.status_code == 201
+    assert sub2.json()["data"]["participant_id"] == participant_id
