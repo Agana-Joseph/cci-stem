@@ -342,6 +342,17 @@ class ImpactTrackingService:
         )
         self.db.commit()
         self.db.refresh(sub)
+
+        # Refresh participant impact score with new longitudinal follow-up evidence
+        try:
+            ScoringService(self.db).calculate_for_participant(
+                participant_id=schedule.participant_id,
+                event_id=schedule.event_id,
+                actor=actor,
+            )
+        except NotFoundError:
+            pass
+
         return sub
 
     def get_participant_follow_ups(

@@ -811,6 +811,20 @@ class QuestionEngineService:
             },
         )
         self.db.commit()
+
+        # Automatically compute participant impact scores so Admin analytics & Six Pillars update live
+        try:
+            from app.scoring.service import ScoringService
+
+            ScoringService(self.db).calculate_for_participant(
+                participant_id=participant.id,
+                event_id=event.id,
+                assessment_submission_id=submission.id,
+                actor=actor,
+            )
+        except NotFoundError:
+            pass
+
         return self.assessment_repo.get_by_id(submission.id)  # type: ignore[return-value]
 
     def get_assessment(self, assessment_id: UUID) -> AssessmentSubmission:

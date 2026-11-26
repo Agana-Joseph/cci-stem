@@ -94,7 +94,7 @@ def test_scenario_a_all_six_pillars_completed(
     history = client.get(
         f"/api/v1/scoring/participants/{p['id']}", headers=admin_headers
     ).json()["data"]
-    assert len(history) == 2
+    assert len(history) == 3
     assert sum(1 for h in history if h["is_latest"]) == 1
 
 

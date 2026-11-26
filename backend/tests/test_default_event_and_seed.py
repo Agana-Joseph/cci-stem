@@ -402,6 +402,22 @@ def test_assessment_submit_auto_registers_new_participant_and_event_registration
     ).json()["data"]
     assert any(r["participant_id"] == participant_id for r in roster)
 
+    # Impact scores & Six Pillars are automatically calculated on submit without manual trigger
+    overview = client.get(
+        f"/api/v1/analytics/events/{event_id}/overview", headers=admin_headers
+    ).json()["data"]
+    assert overview["participation"]["total_registered_participants"] == 1
+    assert overview["participation"]["assessment_respondents_count"] == 1
+    assert overview["participation"]["assessment_completion_rate"] == 1.0
+    assert overview["impact_scores"]["overall_event_impact"]["response_count"] == 1
+    assert overview["impact_scores"]["overall_event_impact"]["average"] is not None
+
+    pillars_analytics = client.get(
+        f"/api/v1/analytics/events/{event_id}/pillars", headers=admin_headers
+    ).json()["data"]
+    assert pillars_analytics["participants_scored"] == 1
+    assert all(p["average"] is not None for p in pillars_analytics["pillars"])
+
     # Re-submitting with the same phone reuses the same participant without creating duplicates
     sub2 = client.post(
         "/api/v1/assessments/submit",
